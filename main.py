@@ -1,4 +1,5 @@
 import os
+import base64
 import logging
 import re
 import sys
@@ -9,9 +10,26 @@ from fastapi import FastAPI, Query
 from pydantic import BaseModel
 import yt_dlp
 
-# Đường dẫn tự động tìm file cookies.txt cùng thư mục với main.py
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-COOKIE_FILE = os.path.join(BASE_DIR, "cookies.txt")
+
+COOKIE_FILE_PATH = "/tmp/cookies.txt"
+
+cookies_b64 = os.getenv("COOKIES_B64")
+if cookies_b64:
+    try:
+        # Giải mã chuỗi Base64 và ghi lại thành file đúng chuẩn Netscape (giữ nguyên Tab và xuống dòng)
+        decoded_bytes = base64.b64decode(cookies_b64.strip())
+        with open(COOKIE_FILE_PATH, "wb") as f:
+            f.write(decoded_bytes)
+        print("-> Đã giải mã COOKIES_B64 thành công vào /tmp/cookies.txt")
+    except Exception as e:
+        print(f"-> Lỗi khi giải mã COOKIES_B64: {e}")
+elif os.getenv("COOKIES"):
+    # Fallback nếu bạn vẫn dùng biến COOKIES dạng text thường
+    with open(COOKIE_FILE_PATH, "w", encoding="utf-8") as f:
+        f.write(os.getenv("COOKIES").strip())
+    print("-> Đã ghi nhận COOKIES dạng raw text")
+else:
+    print("-> CẢNH BÁO: Không tìm thấy biến môi trường cookie!")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -115,7 +133,7 @@ def extract_stream(url: str = Query(..., description="YouTube Video URL or Video
             'geo_bypass': True,
             'socket_timeout': 10,
             # THÊM DÒNG NÀY:
-            'cookiefile': COOKIE_FILE if os.path.exists(COOKIE_FILE) else None,
+            'cookiefile': COOKIE_FILE_PATH if os.path.exists(COOKIE_FILE_PATH) else None,
             'extractor_args': {
                 'youtube': strategy
             }
@@ -157,7 +175,7 @@ def debug_stream(url: str = Query(..., description="YouTube Video URL or Video I
         'quiet': True,
         'skip_download': True,
         # THÊM DÒNG NÀY:
-        'cookiefile': COOKIE_FILE if os.path.exists(COOKIE_FILE) else None,
+        'cookiefile': COOKIE_FILE_PATH if os.path.exists(COOKIE_FILE_PATH) else None,
         'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}
     }
 
