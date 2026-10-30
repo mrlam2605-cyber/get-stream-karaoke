@@ -1,3 +1,4 @@
+import os
 import logging
 import re
 import sys
@@ -7,6 +8,10 @@ from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Query
 from pydantic import BaseModel
 import yt_dlp
+
+# Đường dẫn tự động tìm file cookies.txt cùng thư mục với main.py
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+COOKIE_FILE = os.path.join(BASE_DIR, "cookies.txt")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -109,6 +114,8 @@ def extract_stream(url: str = Query(..., description="YouTube Video URL or Video
             'ignoreerrors': True,
             'geo_bypass': True,
             'socket_timeout': 10,
+            # THÊM DÒNG NÀY:
+            'cookiefile': COOKIE_FILE if os.path.exists(COOKIE_FILE) else None,
             'extractor_args': {
                 'youtube': strategy
             }
@@ -149,6 +156,8 @@ def debug_stream(url: str = Query(..., description="YouTube Video URL or Video I
     ydl_opts = {
         'quiet': True,
         'skip_download': True,
+        # THÊM DÒNG NÀY:
+        'cookiefile': COOKIE_FILE if os.path.exists(COOKIE_FILE) else None,
         'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}
     }
 
