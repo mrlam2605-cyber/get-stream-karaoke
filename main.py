@@ -4,6 +4,8 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 import yt_dlp
+import time
+
 
 app = FastAPI(title="YouTube Stream Extractor")
 
@@ -22,6 +24,17 @@ def extract_video_id(url_or_id: str) -> str:
     if "v=" in clean:
         return clean.split("v=")[1].split("&")[0][:11]
     return clean[-11:]
+
+
+START_TIME = time.time()
+
+@app.get("/ping")
+def ping():
+    uptime_seconds = int(time.time() - START_TIME)
+    return {
+        "status": "alive",
+        "uptime": f"{uptime_seconds}s"
+    }
 
 @app.get("/extract", response_model=ExtractedMedia)
 def extract_stream(url: str = Query(..., description="YouTube Video URL or Video ID")):
