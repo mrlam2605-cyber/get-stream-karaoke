@@ -6,7 +6,6 @@ from pydantic import BaseModel
 import yt_dlp
 
 app = FastAPI(title="YouTube Stream Extractor")
-
 START_TIME = time.time()
 
 class ExtractedMedia(BaseModel):
@@ -25,37 +24,32 @@ def extract_video_id(url_or_id: str) -> str:
         return clean.split("v=")[1].split("&")[0][:11]
     return clean[-11:]
 
-def build_ydl_opts(client_list: list) -> dict:
-    return {
-        'quiet': True,
-        'no_warnings': True,
-        'skip_download': True,
-        'noplaylist': True,
-        'ignoreerrors': True,
-        'geo_bypass': True,
-        'socket_timeout': 10,
-        'extractor_args': {
-            'youtube': {
-                'player_client': client_list,
-                'player_skip': ['webpage', 'configs']
-            }
-        }
-    }
-
 @app.get("/extract", response_model=ExtractedMedia)
 def extract_stream(url: str = Query(..., description="YouTube Video URL or Video ID")):
     video_id = extract_video_id(url)
     target_url = f"https://www.youtube.com/watch?v={video_id}"
 
-    # Danh sách client ưu tiên vượt IP bot của datacenter
-    client_strategies = [
-        ['tv_embedded', 'android', 'ios'],
-        ['android', 'ios'],
-        ['tv_embedded']
+    # Danh sách các tổ hợp client tốt nhất hiện nay cho IP Datacenter
+    strategies = [
+        {'player_client': ['ios']},
+        {'player_client': ['android']},
+        {'player_client': ['tv_embedded', 'mweb']}
     ]
 
-    for clients in client_strategies:
-        ydl_opts = build_ydl_opts(clients)
+    for strategy in strategies:
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'skip_download': True,
+            'noplaylist': True,
+            'ignoreerrors': True,
+            'geo_bypass': True,
+            'socket_timeout': 10,
+            'extractor_args': {
+                'youtube': strategy
+            }
+        }
+
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(target_url, download=False)
@@ -75,13 +69,14 @@ def extract_stream(url: str = Query(..., description="YouTube Video URL or Video
                     if not stream_url:
                         continue
 
-                    # Bỏ qua các định dạng phân đoạn m3u8/mpd nếu app cần stream trực tiếp MP4/M4A/WebM
                     protocol = f.get('protocol', '')
+                    # Bỏ qua m3u8 và manifest phân đoạn
                     if 'm3u8' in protocol or 'mhtml' in protocol:
                         continue
 
                     vcodec = f.get('vcodec', 'none')
                     acodec = f.get('acodec', 'none')
+
                     has_video = vcodec not in ('none', None)
                     has_audio = acodec not in ('none', None)
 
@@ -92,7 +87,7 @@ def extract_stream(url: str = Query(..., description="YouTube Video URL or Video
                     elif has_video and has_audio:
                         progressive.append(f)
 
-                # 1. Ưu tiên: Tách 2 luồng chất lượng cao nhất (Video riêng + Audio riêng)
+                # 1. Tìm video riêng + audio riêng chất lượng cao nhất
                 best_video = max(video_only, key=lambda x: (x.get('height') or 0, x.get('tbr') or 0), default=None)
                 best_audio = max(audio_only, key=lambda x: (x.get('abr') or 0, x.get('tbr') or 0), default=None)
 
@@ -103,7 +98,7 @@ def extract_stream(url: str = Query(..., description="YouTube Video URL or Video
                         isProgressive=False
                     )
 
-                # 2. Dự phòng: Luồng Progressive có sẵn cả hình và tiếng
+                # 2. Fallback sang stream Progressive (có cả hình + tiếng)
                 best_prog = max(progressive, key=lambda x: (x.get('height') or 0, x.get('tbr') or 0), default=None)
                 if best_prog:
                     return ExtractedMedia(
@@ -113,18 +108,11 @@ def extract_stream(url: str = Query(..., description="YouTube Video URL or Video
                     )
 
         except Exception as e:
-            print(f"[yt-dlp Extractor Error] với clients {clients}: {e}")
+            print(f"[Extractor Debug] Thử client {strategy} thất bại: {e}")
             continue
 
     return ExtractedMedia(videoUrl=None, audioUrl=None, isProgressive=False)
 
 @app.get("/ping")
 def ping():
-    return {
-        "status": "alive",
-        "uptime": f"{int(time.time() - START_TIME)}s"
-    }
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+    return {"status": "alive", "uptime": f"{int(time.time() - START_TIME)}s"}
