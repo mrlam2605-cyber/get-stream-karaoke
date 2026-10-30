@@ -116,60 +116,138 @@ def process_formats(formats: List[Dict[str, Any]]) -> ExtractedMedia:
 
     return ExtractedMedia(videoUrl=None, audioUrl=None, isProgressive=False)
 
+
+def get_base_ydl_opts(client_list: list) -> dict:
+    has_cookie = os.path.exists(COOKIE_FILE_PATH) and os.path.getsize(COOKIE_FILE_PATH) > 0
+    return {
+        'quiet': True,
+        'no_warnings': True,
+        'skip_download': True,
+        'noplaylist': True,
+        'ignoreerrors': True,
+        'geo_bypass': True,
+        'socket_timeout': 15,
+        'cookiefile': COOKIE_FILE_PATH if has_cookie else None,
+        # Tránh crash khi một client nào đó không nhả format:
+        'ignore_no_formats_error': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': client_list
+            }
+        }
+    }
+
 @app.get("/extract", response_model=ExtractedMedia)
 def extract_stream(url: str = Query(..., description="YouTube Video URL or Video ID")):
     video_id = extract_video_id(url)
     target_url = f"https://www.youtube.com/watch?v={video_id}"
-    logger.info(f"=== BẮT ĐẦU TRÍCH XUẤT: {video_id} ===")
 
+    # Bộ 3 chiến lược tối ưu nhất khi đã có Cookie:
     strategies = [
-        {'player_client': ['android', 'ios']},
-        {'player_client': ['tv_embedded', 'mweb']},
-        {'player_client': ['web']}
+        ['ios', 'mweb'],      # Nhận cookie rất tốt, không đòi PO-Token desktop
+        ['android', 'ios'],   # Trích xuất stream DASH / Progressive mượt mà
+        ['tv_embedded', 'mweb']
     ]
 
-    for index, strategy in enumerate(strategies, start=1):
-        logger.info(f"[Chiến lược #{index}] Thử nghiệm client: {strategy['player_client']}")
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'skip_download': True,
-            'noplaylist': True,
-            'ignoreerrors': True,
-            'geo_bypass': True,
-            'socket_timeout': 10,
-            # THÊM DÒNG NÀY:
-            'cookiefile': COOKIE_FILE_PATH if os.path.exists(COOKIE_FILE_PATH) else None,
-            'extractor_args': {
-                'youtube': strategy
-            }
-        }
-
+    for strategy in strategies:
+        ydl_opts = get_base_ydl_opts(strategy)
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(target_url, download=False)
                 if not info:
-                    logger.warning(f"[Chiến lược #{index}] ydl.extract_info trả về None")
                     continue
 
                 formats = info.get('formats', [])
                 if not formats:
-                    logger.warning(f"[Chiến lược #{index}] Không tìm thấy format nào trong info")
                     continue
 
-                media = process_formats(formats)
-                if media.videoUrl:
-                    logger.info(f"[Chiến lược #{index}] Thành công! Trả về kết quả.")
-                    return media
+                video_only = []
+                audio_only = []
+                progressive = []
 
+                for f in formats:
+                    stream_url = f.get('url')
+                    if not stream_url:
+                        continue
+
+                    protocol = f.get('protocol', '')
+                    if 'm3u8' in protocol or 'mhtml' in protocol:
+                        continue
+
+                    vcodec = f.get('vcodec', 'none')
+                    acodec = f.get('acodec', 'none')
+                    has_video = vcodec not in ('none', None)
+                    has_audio = acodec not in ('none', None)
+
+                    if has_video and not has_audio:
+                        video_only.append(f)
+                    elif has_audio and not has_video:
+                        audio_only.append(f)
+                    elif has_video and has_audio:
+                        progressive.append(f)
+
+                # 1. Ưu tiên video riêng + audio riêng
+                best_video = max(video_only, key=lambda x: (x.get('height') or 0, x.get('tbr') or 0), default=None)
+                best_audio = max(audio_only, key=lambda x: (x.get('abr') or 0, x.get('tbr') or 0), default=None)
+
+                if best_video and best_audio:
+                    return ExtractedMedia(
+                        videoUrl=best_video.get('url'),
+                        audioUrl=best_audio.get('url'),
+                        isProgressive=False
+                    )
+
+                # 2. Dự phòng progressive
+                best_prog = max(progressive, key=lambda x: (x.get('height') or 0, x.get('tbr') or 0), default=None)
+                if best_prog:
+                    return ExtractedMedia(
+                        videoUrl=best_prog.get('url'),
+                        audioUrl=None,
+                        isProgressive=True
+                    )
         except Exception as e:
-            logger.error(f"[Chiến lược #{index}] Ngoại lệ xảy ra: {str(e)}")
-            logger.error(traceback.format_exc())
+            logger.error(f"Thử nghiệm {strategy} thất bại: {e}")
             continue
 
-    logger.error(f"=== TẤT CẢ CHIẾN LƯỢC ĐỀU THẤT BẠI CHO VIDEO {video_id} ===")
     return ExtractedMedia(videoUrl=None, audioUrl=None, isProgressive=False)
 
+
+@app.get("/debug")
+def debug_stream(url: str = Query(..., description="YouTube Video URL or Video ID")):
+    video_id = extract_video_id(url)
+    target_url = f"https://www.youtube.com/watch?v={video_id}"
+
+    # Đổi sang ['ios', 'mweb'] thay vì ['web']
+    ydl_opts = get_base_ydl_opts(['ios', 'mweb'])
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(target_url, download=False)
+            formats = info.get('formats', []) if info else []
+            return {
+                "video_id": video_id,
+                "cookie_loaded": os.path.exists(COOKIE_FILE_PATH),
+                "total_formats": len(formats),
+                "formats": [
+                    {
+                        "itag": f.get("format_id"),
+                        "vcodec": f.get("vcodec"),
+                        "acodec": f.get("acodec"),
+                        "height": f.get("height"),
+                        "has_url": bool(f.get("url"))
+                    }
+                    for f in formats
+                ]
+            }
+    except Exception as e:
+        return {
+            "video_id": video_id,
+            "cookie_loaded": os.path.exists(COOKIE_FILE_PATH),
+            "error_type": type(e).__name__,
+            "error_message": str(e),
+            "traceback": traceback.format_exc()
+        }
+    
 @app.get("/debug")
 def debug_stream(url: str = Query(..., description="YouTube Video URL or Video ID")):
     """Endpoint trả thẳng thông tin format và lỗi ra JSON trên trình duyệt để kiểm tra"""
