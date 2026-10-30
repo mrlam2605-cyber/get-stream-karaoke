@@ -13,23 +13,29 @@ import yt_dlp
 
 COOKIE_FILE_PATH = "/tmp/cookies.txt"
 
-cookies_b64 = os.getenv("COOKIES_B64")
-if cookies_b64:
-    try:
-        # Giải mã chuỗi Base64 và ghi lại thành file đúng chuẩn Netscape (giữ nguyên Tab và xuống dòng)
-        decoded_bytes = base64.b64decode(cookies_b64.strip())
-        with open(COOKIE_FILE_PATH, "wb") as f:
-            f.write(decoded_bytes)
-        print("-> Đã giải mã COOKIES_B64 thành công vào /tmp/cookies.txt")
-    except Exception as e:
-        print(f"-> Lỗi khi giải mã COOKIES_B64: {e}")
-elif os.getenv("COOKIES"):
-    # Fallback nếu bạn vẫn dùng biến COOKIES dạng text thường
-    with open(COOKIE_FILE_PATH, "w", encoding="utf-8") as f:
-        f.write(os.getenv("COOKIES").strip())
-    print("-> Đã ghi nhận COOKIES dạng raw text")
+# Lấy giá trị từ một trong hai biến môi trường
+raw_cookie_data = os.getenv("COOKIES_B64") or os.getenv("COOKIES")
+
+if raw_cookie_data:
+    raw_cookie_data = raw_cookie_data.strip()
+    
+    # Kiểm tra xem chuỗi có phải là Base64 (bắt đầu bằng 'IyB' tức là '# ') hay text thường
+    if raw_cookie_data.startswith("IyB") or not raw_cookie_data.startswith("#"):
+        try:
+            # Giải mã Base64 nhị phân chuẩn Netscape
+            decoded_bytes = base64.b64decode(raw_cookie_data)
+            with open(COOKIE_FILE_PATH, "wb") as f:
+                f.write(decoded_bytes)
+            print("-> [COOKIE] Đã giải mã thành công chuỗi Base64 vào /tmp/cookies.txt")
+        except Exception as e:
+            print(f"-> [COOKIE ERROR] Lỗi giải mã Base64: {e}")
+    else:
+        # Trường hợp chuỗi truyền vào là text thuần đã có sẵn ký tự '#'
+        with open(COOKIE_FILE_PATH, "w", encoding="utf-8") as f:
+            f.write(raw_cookie_data)
+        print("-> [COOKIE] Đã ghi nhận file cookie dạng raw text vào /tmp/cookies.txt")
 else:
-    print("-> CẢNH BÁO: Không tìm thấy biến môi trường cookie!")
+    print("-> [COOKIE WARNING] Không tìm thấy biến môi trường COOKIES hoặc COOKIES_B64!")
 
 logging.basicConfig(
     level=logging.INFO,
